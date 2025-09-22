@@ -1,0 +1,248 @@
+{
+  "name": "Setup Qdrant Collection",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "manual-trigger-setup",
+      "name": "Setup Collection",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Qdrant 컬렉션 설정 시작\nconsole.log('🔧 Qdrant 컬렉션 설정 시작...');\n\nreturn {\n  collection_name: 'codebase_collection',\n  vector_size: 384, // all-MiniLM-L6-v2 모델의 벡터 차원\n  distance: 'Cosine',\n  status: 'initializing'\n};"
+      },
+      "id": "init-collection-setup",
+      "name": "Initialize Collection Setup",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [400, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://qdrant:6333/collections/codebase_collection",
+        "sendQuery": false,
+        "sendHeaders": false,
+        "sendBody": false,
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "check-collection-exists",
+      "name": "Check Collection Exists",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [560, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.statusCode }}",
+              "rightValue": 200,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "collection-exists-check",
+      "name": "Collection Exists?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [720, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 컬렉션이 이미 존재함\nconst collectionInfo = $('Check Collection Exists').first().json;\n\nconsole.log('✅ 컬렉션이 이미 존재합니다: codebase_collection');\nconsole.log('📊 컬렉션 정보:', JSON.stringify(collectionInfo.result, null, 2));\n\nreturn {\n  status: 'exists',\n  collection_name: 'codebase_collection',\n  message: 'Collection already exists',\n  info: collectionInfo.result\n};"
+      },
+      "id": "collection-already-exists",
+      "name": "Collection Already Exists",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 200]
+    },
+    {
+      "parameters": {
+        "url": "http://qdrant:6333/collections/codebase_collection",
+        "httpMethod": "PUT",
+        "sendQuery": false,
+        "sendHeaders": false,
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={{ JSON.stringify({\n  \"vectors\": {\n    \"size\": 384,\n    \"distance\": \"Cosine\"\n  },\n  \"optimizers_config\": {\n    \"default_segment_number\": 2\n  },\n  \"replication_factor\": 1\n}) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "create-collection",
+      "name": "Create Collection",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [880, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 컬렉션 생성 결과 확인\nconst createResult = $('Create Collection').first().json;\n\nif (createResult.result === true) {\n  console.log('🎉 Qdrant 컬렉션 생성 완료!');\n  console.log('📋 컬렉션명: codebase_collection');\n  console.log('📏 벡터 차원: 384');\n  console.log('📐 거리 측정: Cosine');\n  \n  return {\n    status: 'created',\n    collection_name: 'codebase_collection',\n    vector_size: 384,\n    distance: 'Cosine',\n    message: 'Collection created successfully',\n    created_at: new Date().toISOString()\n  };\n} else {\n  console.error('❌ 컬렉션 생성 실패:', JSON.stringify(createResult));\n  throw new Error(`Collection creation failed: ${JSON.stringify(createResult)}`);\n}"
+      },
+      "id": "verify-creation",
+      "name": "Verify Creation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1040, 400]
+    },
+    {
+      "parameters": {
+        "url": "http://qdrant:6333/collections/codebase_collection",
+        "sendQuery": false,
+        "sendHeaders": false,
+        "sendBody": false,
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "final-collection-info",
+      "name": "Get Final Collection Info",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1200, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 최종 컬렉션 정보 표시\nconst collectionInfo = $json;\nconst setupInfo = $('Collection Already Exists').first()?.json || $('Verify Creation').first()?.json;\n\nconsole.log('📊 최종 컬렉션 상태:');\nconsole.log('- 컬렉션명:', collectionInfo.result.collection_name);\nconsole.log('- 벡터 수:', collectionInfo.result.vectors_count);\nconsole.log('- 인덱스된 벡터 수:', collectionInfo.result.indexed_vectors_count);\nconsole.log('- 상태:', collectionInfo.result.status);\n\nreturn {\n  setup_status: setupInfo?.status || 'completed',\n  collection_name: collectionInfo.result.collection_name,\n  vectors_count: collectionInfo.result.vectors_count,\n  indexed_vectors_count: collectionInfo.result.indexed_vectors_count,\n  collection_status: collectionInfo.result.status,\n  config: collectionInfo.result.config,\n  ready_for_indexing: collectionInfo.result.status === 'green',\n  timestamp: new Date().toISOString()\n};"
+      },
+      "id": "final-status",
+      "name": "Final Status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1360, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 컬렉션 체크 실패 처리\nconst checkResult = $('Check Collection Exists').first().json;\n\nif (checkResult.statusCode === 404) {\n  console.log('📝 컬렉션이 존재하지 않음, 새로 생성 필요');\n  return {\n    status: 'not_found',\n    message: 'Collection does not exist, creating new one'\n  };\n} else {\n  console.error('❌ 컬렉션 상태 확인 실패:', checkResult.statusCode);\n  throw new Error(`Failed to check collection: ${checkResult.statusCode}`);\n}"
+      },
+      "id": "handle-check-error",
+      "name": "Handle Check Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 500]
+    }
+  ],
+  "connections": {
+    "Setup Collection": {
+      "main": [
+        [
+          {
+            "node": "Initialize Collection Setup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Initialize Collection Setup": {
+      "main": [
+        [
+          {
+            "node": "Check Collection Exists",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Collection Exists": {
+      "main": [
+        [
+          {
+            "node": "Collection Exists?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collection Exists?": {
+      "main": [
+        [
+          {
+            "node": "Collection Already Exists",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create Collection",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collection Already Exists": {
+      "main": [
+        [
+          {
+            "node": "Get Final Collection Info",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Collection": {
+      "main": [
+        [
+          {
+            "node": "Verify Creation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Creation": {
+      "main": [
+        [
+          {
+            "node": "Get Final Collection Info",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Final Collection Info": {
+      "main": [
+        [
+          {
+            "node": "Final Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": ["setup", "qdrant", "initialization"],
+  "triggerCount": 0,
+  "updatedAt": "2024-09-22T04:20:00.000Z",
+  "versionId": "1"
+}

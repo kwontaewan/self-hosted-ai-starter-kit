@@ -1,0 +1,148 @@
+{
+  "name": "Code Indexing Workflow",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "90e5c5ea-40ba-4c32-a4ef-c7e2c4e6d9e9",
+      "name": "When clicking 'Test workflow'",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "operation": "clone",
+        "sourceRepository": "https://github.com/musinsa/app-store-ios.git",
+        "targetPath": "/data/shared/cloned_repo"
+      },
+      "id": "git-clone-node",
+      "name": "Git Clone",
+      "type": "n8n-nodes-base.git",
+      "typeVersion": 1,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "options": {
+          "recursive": true,
+          "fileExtension": ".kt,.swift"
+        },
+        "filePath": "/data/shared/cloned_repo"
+      },
+      "id": "read-files-node",
+      "name": "Read Files",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [640, 300]
+    },
+    {
+      "parameters": {
+        "chunkSize": 1000,
+        "chunkOverlap": 100,
+        "options": {}
+      },
+      "id": "text-splitter-node",
+      "name": "Text Splitter",
+      "type": "@n8n/n8n-nodes-langchain.textSplitterRecursiveCharacterTextSplitter",
+      "typeVersion": 1,
+      "position": [840, 300]
+    },
+    {
+      "parameters": {
+        "model": "nomic-embed-text",
+        "options": {},
+        "text": "={{ $json.textContent }}"
+      },
+      "id": "embeddings-node",
+      "name": "Embeddings Ollama",
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOllama",
+      "typeVersion": 1,
+      "position": [1040, 300],
+      "credentials": {
+        "ollamaApi": {
+          "id": "1",
+          "name": "Ollama"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "qdrantCollection": {
+          "__rl": true,
+          "value": "codebase_collection",
+          "mode": "list"
+        },
+        "options": {}
+      },
+      "id": "qdrant-node",
+      "name": "Qdrant Vector Store",
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreQdrant",
+      "typeVersion": 1,
+      "position": [1240, 300],
+      "credentials": {
+        "qdrantApi": {
+          "id": "2",
+          "name": "Qdrant"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "When clicking 'Test workflow'": {
+      "main": [
+        [
+          {
+            "node": "Git Clone",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Git Clone": {
+      "main": [
+        [
+          {
+            "node": "Read Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Files": {
+      "main": [
+        [
+          {
+            "node": "Text Splitter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Text Splitter": {
+      "main": [
+        [
+          {
+            "node": "Embeddings Ollama",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings Ollama": {
+      "main": [
+        [
+          {
+            "node": "Qdrant Vector Store",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

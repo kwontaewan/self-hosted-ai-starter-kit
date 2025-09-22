@@ -1,0 +1,158 @@
+{
+  "name": "Code Query Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "query",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-node",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [240, 300],
+      "webhookId": "code-query-webhook"
+    },
+    {
+      "parameters": {
+        "model": "nomic-embed-text",
+        "options": {},
+        "text": "={{ $json.body.query }}"
+      },
+      "id": "query-embeddings-node",
+      "name": "Query Embeddings",
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOllama",
+      "typeVersion": 1,
+      "position": [440, 300],
+      "credentials": {
+        "ollamaApi": {
+          "id": "1",
+          "name": "Ollama"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "qdrantCollection": {
+          "__rl": true,
+          "value": "codebase_collection",
+          "mode": "list"
+        },
+        "limit": 5,
+        "options": {}
+      },
+      "id": "qdrant-search-node",
+      "name": "Qdrant Search",
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreQdrant",
+      "typeVersion": 1,
+      "position": [640, 300],
+      "credentials": {
+        "qdrantApi": {
+          "id": "2",
+          "name": "Qdrant"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "llama3",
+        "options": {
+          "temperature": 0.7
+        }
+      },
+      "id": "ollama-chat-node",
+      "name": "Ollama Chat",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+      "typeVersion": 1,
+      "position": [840, 400],
+      "credentials": {
+        "ollamaApi": {
+          "id": "1",
+          "name": "Ollama"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "prompt": "코드베이스에서 다음 질문과 관련된 정보를 찾았습니다:\n\n{{$json.documents}}\n\n질문: {{$json.body.query}}\n\n위의 코드를 바탕으로 질문에 답변해주세요.",
+        "options": {
+          "systemMessage": "당신은 코드 분석을 도와주는 유용한 AI 어시스턴트입니다."
+        }
+      },
+      "id": "ai-agent-node",
+      "name": "AI Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1,
+      "position": [840, 300]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "respond-webhook-node",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1040, 300]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Query Embeddings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query Embeddings": {
+      "main": [
+        [
+          {
+            "node": "Qdrant Search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Qdrant Search": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ollama Chat": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

@@ -3,6 +3,7 @@ volumes:
   postgres_storage:
   ollama_storage:
   qdrant_storage:
+  embedding_model_data:
 
 networks:
   demo:
@@ -20,6 +21,13 @@ x-n8n: &service-n8n
     - N8N_ENCRYPTION_KEY
     - N8N_USER_MANAGEMENT_JWT_SECRET
     - OLLAMA_HOST=${OLLAMA_HOST:-ollama:11434}
+    - N8N_COMMUNITY_PACKAGES_ENABLED=true
+    - N8N_NODES_INCLUDE='["@n8n/n8n-nodes-langchain"]'
+    - N8N_RUNNERS_ENABLED=true
+    - N8N_RUNNERS_PYTHON=python3
+    - GENERIC_TIMEZONE=Asia/Seoul
+    - N8N_SECURE_COOKIE=false
+    - WEBHOOK_URL=http://localhost:5678/
   env_file:
     - path: .env
       required: true
@@ -79,6 +87,16 @@ services:
       postgres:
         condition: service_healthy
 
+  n8n-python-runner:
+    image: python:3.11-alpine
+    hostname: n8n-python-runner
+    container_name: n8n-python-runner
+    networks: ['demo']
+    restart: unless-stopped
+    command: ["python3", "-m", "http.server", "8080"]
+    volumes:
+      - ./shared:/data/shared
+
   n8n:
     <<: *service-n8n
     hostname: n8n
@@ -95,6 +113,12 @@ services:
         condition: service_healthy
       n8n-import:
         condition: service_completed_successfully
+      n8n-python-runner:
+        condition: service_started
+      embedding-service:
+        condition: service_started
+      qdrant:
+        condition: service_started
 
   qdrant:
     image: qdrant/qdrant
@@ -106,6 +130,24 @@ services:
       - 6333:6333
     volumes:
       - qdrant_storage:/qdrant/storage
+
+  embedding-service:
+    image: python:3.11-slim
+    container_name: embedding_model_server
+    hostname: embedding-service
+    networks: ['demo']
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./shared:/app/shared
+      - ./embedding_service.py:/app/embedding_service.py
+    working_dir: /app
+    command: >
+      sh -c "
+      pip install sentence-transformers flask &&
+      python embedding_service.py
+      "
 
   ollama-cpu:
     profiles: ["cpu"]

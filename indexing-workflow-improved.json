@@ -1,0 +1,362 @@
+{
+  "name": "Code Indexing Workflow (Improved)",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "manual-trigger-node",
+      "name": "Start Indexing",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 인덱싱 시작 로그\nconsole.log('🚀 코드베이스 인덱싱 시작...');\n\nreturn {\n  status: 'starting',\n  timestamp: new Date().toISOString(),\n  repository: 'https://github.com/musinsa/app-store-ios.git',\n  target_path: '/data/shared/cloned_repo'\n};"
+      },
+      "id": "init-log-node",
+      "name": "Initialize Logging",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [400, 300]
+    },
+    {
+      "parameters": {
+        "command": "cd /data/shared && rm -rf cloned_repo && git clone https://github.com/musinsa/app-store-ios.git cloned_repo"
+      },
+      "id": "git-clone-node",
+      "name": "Git Clone Repository",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [560, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Git 클론 결과 확인\nconst gitResult = $('Git Clone Repository').first().json;\n\nif (gitResult.exitCode !== 0) {\n  throw new Error(`Git clone failed: ${gitResult.stderr}`);\n}\n\nconsole.log('✅ Git 리포지토리 클론 완료');\n\nreturn {\n  status: 'cloned',\n  exitCode: gitResult.exitCode,\n  message: 'Repository cloned successfully'\n};"
+      },
+      "id": "verify-clone-node",
+      "name": "Verify Clone Success",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [720, 300]
+    },
+    {
+      "parameters": {
+        "command": "find /data/shared/cloned_repo -type f \\( -name '*.swift' -o -name '*.kt' \\) | head -100"
+      },
+      "id": "find-files-node",
+      "name": "Find Source Files",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [880, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 파일 목록 처리\nconst findResult = $('Find Source Files').first().json;\n\nif (findResult.exitCode !== 0) {\n  throw new Error(`File search failed: ${findResult.stderr}`);\n}\n\nconst fileList = findResult.stdout.trim().split('\\n').filter(f => f.length > 0);\nconsole.log(`📁 발견된 소스 파일: ${fileList.length}개`);\n\n// 각 파일을 개별 아이템으로 반환\nreturn fileList.map(filePath => ({\n  filePath: filePath,\n  fileName: filePath.split('/').pop(),\n  fileType: filePath.endsWith('.swift') ? 'swift' : 'kotlin'\n}));"
+      },
+      "id": "process-file-list-node",
+      "name": "Process File List",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1040, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 파일 내용 읽기 및 청크 분할\nconst fs = require('fs');\nconst path = require('path');\n\nconst fileInfo = $json;\nconst filePath = fileInfo.filePath;\n\ntry {\n  // 파일 내용 읽기\n  const content = fs.readFileSync(filePath, 'utf8');\n  \n  // 텍스트 청킹 (1000자 단위, 100자 오버랩)\n  const chunkSize = 1000;\n  const chunkOverlap = 100;\n  const chunks = [];\n  \n  if (content.length <= chunkSize) {\n    // 파일이 작으면 전체를 하나의 청크로\n    chunks.push({\n      text_chunk: content,\n      chunk_index: 0,\n      file_path: filePath,\n      file_name: fileInfo.fileName,\n      file_type: fileInfo.fileType,\n      chunk_size: content.length\n    });\n  } else {\n    // 큰 파일은 오버랩을 고려해서 분할\n    let start = 0;\n    let chunkIndex = 0;\n    \n    while (start < content.length) {\n      const end = Math.min(start + chunkSize, content.length);\n      const chunk = content.slice(start, end);\n      \n      chunks.push({\n        text_chunk: chunk,\n        chunk_index: chunkIndex,\n        file_path: filePath,\n        file_name: fileInfo.fileName,\n        file_type: fileInfo.fileType,\n        chunk_size: chunk.length\n      });\n      \n      start = end - chunkOverlap;\n      chunkIndex++;\n    }\n  }\n  \n  console.log(`📄 ${fileInfo.fileName}: ${chunks.length}개 청크 생성`);\n  return chunks;\n  \n} catch (error) {\n  console.error(`❌ 파일 읽기 실패 ${filePath}: ${error.message}`);\n  return [];\n}"
+      },
+      "id": "read-and-chunk-node",
+      "name": "Read File & Create Chunks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1200, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://embedding-service:8080/embed",
+        "sendQuery": false,
+        "sendHeaders": false,
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={{ JSON.stringify({\"inputs\": $json.text_chunk}) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "generate-embeddings-node",
+      "name": "Generate Embeddings",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1360, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 임베딩 결과 처리 및 Qdrant 포인트 준비\nconst chunkData = $('Read File & Create Chunks').first().json;\nconst embeddingResponse = $json;\n\n// 임베딩 벡터 추출\nconst embedding = embeddingResponse[0]; // 첫 번째 임베딩\n\nif (!embedding || !Array.isArray(embedding)) {\n  throw new Error('Invalid embedding response');\n}\n\n// Qdrant 포인트 생성\nconst pointId = require('crypto').randomUUID();\n\nconst qdrantPoint = {\n  id: pointId,\n  vector: embedding,\n  payload: {\n    text_chunk: chunkData.text_chunk,\n    file_path: chunkData.file_path,\n    file_name: chunkData.file_name,\n    file_type: chunkData.file_type,\n    chunk_index: chunkData.chunk_index,\n    chunk_size: chunkData.chunk_size,\n    indexed_at: new Date().toISOString()\n  }\n};\n\nconsole.log(`🔢 임베딩 생성 완료: ${chunkData.file_name} [${chunkData.chunk_index}]`);\n\nreturn qdrantPoint;"
+      },
+      "id": "prepare-qdrant-point-node",
+      "name": "Prepare Qdrant Point",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1520, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://qdrant:6333/collections/codebase_collection/points",
+        "sendQuery": false,
+        "sendHeaders": false,
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={{ JSON.stringify({\n  \"points\": [$json]\n}) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "store-in-qdrant-node",
+      "name": "Store in Qdrant",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1680, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 저장 결과 확인 및 로깅\nconst qdrantResponse = $json;\nconst chunkData = $('Prepare Qdrant Point').first().json;\n\nif (qdrantResponse.status === 'ok') {\n  console.log(`✅ Qdrant 저장 완료: ${chunkData.payload.file_name} [${chunkData.payload.chunk_index}]`);\n  \n  return {\n    status: 'success',\n    point_id: chunkData.id,\n    file_name: chunkData.payload.file_name,\n    chunk_index: chunkData.payload.chunk_index,\n    stored_at: new Date().toISOString()\n  };\n} else {\n  console.error(`❌ Qdrant 저장 실패: ${JSON.stringify(qdrantResponse)}`);\n  throw new Error(`Failed to store in Qdrant: ${JSON.stringify(qdrantResponse)}`);\n}"
+      },
+      "id": "verify-storage-node",
+      "name": "Verify Storage",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1840, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.exitCode }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-clone-success",
+      "name": "Check Clone Success",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [720, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Git 클론 실패 처리\nconst gitResult = $('Git Clone Repository').first().json;\n\nconsole.error('❌ Git 클론 실패:', gitResult.stderr);\n\nreturn {\n  error: 'Git clone failed',\n  details: gitResult.stderr,\n  exitCode: gitResult.exitCode,\n  timestamp: new Date().toISOString()\n};"
+      },
+      "id": "handle-clone-error",
+      "name": "Handle Clone Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 600]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-embedding-success",
+      "name": "Check Embedding Success",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1360, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 임베딩 실패 처리\nconst chunkData = $('Read File & Create Chunks').first().json;\n\nconsole.error(`❌ 임베딩 생성 실패: ${chunkData.file_name}`);\n\nreturn {\n  error: 'Embedding generation failed',\n  file_name: chunkData.file_name,\n  chunk_index: chunkData.chunk_index,\n  timestamp: new Date().toISOString()\n};"
+      },
+      "id": "handle-embedding-error",
+      "name": "Handle Embedding Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1520, 600]
+    }
+  ],
+  "connections": {
+    "Start Indexing": {
+      "main": [
+        [
+          {
+            "node": "Initialize Logging",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Initialize Logging": {
+      "main": [
+        [
+          {
+            "node": "Git Clone Repository",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Git Clone Repository": {
+      "main": [
+        [
+          {
+            "node": "Check Clone Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Clone Success": {
+      "main": [
+        [
+          {
+            "node": "Verify Clone Success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Handle Clone Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Clone Success": {
+      "main": [
+        [
+          {
+            "node": "Find Source Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Source Files": {
+      "main": [
+        [
+          {
+            "node": "Process File List",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process File List": {
+      "main": [
+        [
+          {
+            "node": "Read File & Create Chunks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read File & Create Chunks": {
+      "main": [
+        [
+          {
+            "node": "Generate Embeddings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Embeddings": {
+      "main": [
+        [
+          {
+            "node": "Check Embedding Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Embedding Success": {
+      "main": [
+        [
+          {
+            "node": "Prepare Qdrant Point",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Handle Embedding Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Qdrant Point": {
+      "main": [
+        [
+          {
+            "node": "Store in Qdrant",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store in Qdrant": {
+      "main": [
+        [
+          {
+            "node": "Verify Storage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": ["indexing", "RAG", "codebase"],
+  "triggerCount": 0,
+  "updatedAt": "2024-09-22T04:15:00.000Z",
+  "versionId": "1"
+}

@@ -1,0 +1,224 @@
+{
+  "name": "RAG Query Workflow (Simple)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "rag-chat",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-node",
+      "name": "RAG Chat Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "webhookId": "rag-chat-webhook"
+    },
+    {
+      "parameters": {
+        "url": "http://embedding-service:8080/embed",
+        "sendQuery": false,
+        "sendHeaders": false,
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={{ JSON.stringify({\"inputs\": $json.body.query}) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "embedding-node",
+      "name": "Get Query Embedding",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://qdrant:6333/collections/codebase_collection/points/search",
+        "sendQuery": false,
+        "sendHeaders": false,
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={{ JSON.stringify({\n  \"vector\": $json[0],\n  \"limit\": 3,\n  \"with_payload\": true\n}) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "qdrant-search-node",
+      "name": "Qdrant Vector Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [640, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 원본 쿼리 가져오기\nconst query = $('RAG Chat Webhook').first().json.body.query;\n\n// Qdrant 검색 결과 처리\nconst searchResponse = $('Qdrant Vector Search').first().json;\nconst searchResults = searchResponse.result || [];\n\n// 컨텍스트 추출\nconst contexts = searchResults.map(item => {\n  const payload = item.payload || {};\n  return payload.text_chunk || payload.content || payload.text || '';\n}).filter(text => text.length > 0);\n\nconst contextString = contexts.join('\\n---\\n');\n\n// RAG 프롬프트 구성\nconst prompt = `다음 컨텍스트를 기반으로 사용자의 질문에 답변해주세요.\n\n컨텍스트:\n${contextString}\n\n질문: ${query}\n\n답변:`;\n\nreturn {\n  prompt: prompt,\n  originalQuery: query,\n  contextCount: contexts.length,\n  searchResults: searchResults.length\n};"
+      },
+      "id": "prompt-construction-node",
+      "name": "Construct RAG Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [840, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://ollama:11434/api/generate",
+        "sendQuery": false,
+        "sendHeaders": false,
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={{ JSON.stringify({\n  \"model\": \"llama3.2\",\n  \"prompt\": $json.prompt,\n  \"stream\": false,\n  \"options\": {\n    \"temperature\": 0.7\n  }\n}) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "ollama-generation-node",
+      "name": "Generate with Ollama",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1040, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ {\n  \"response\": $json.response,\n  \"context_count\": $('Construct RAG Prompt').first().json.contextCount,\n  \"query\": $('Construct RAG Prompt').first().json.originalQuery\n} }}",
+        "options": {}
+      },
+      "id": "webhook-response-node",
+      "name": "Send Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1240, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "embedding-check",
+      "name": "Check Embedding Success",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [440, 500]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": {
+          "error": "Embedding service failed",
+          "message": "Unable to generate embeddings for your query",
+          "query": "={{ $('RAG Chat Webhook').first().json.body.query }}"
+        },
+        "responseCode": 500,
+        "options": {}
+      },
+      "id": "embedding-error-response",
+      "name": "Embedding Error Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [640, 600]
+    }
+  ],
+  "connections": {
+    "RAG Chat Webhook": {
+      "main": [
+        [
+          {
+            "node": "Get Query Embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Query Embedding": {
+      "main": [
+        [
+          {
+            "node": "Check Embedding Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Embedding Success": {
+      "main": [
+        [
+          {
+            "node": "Qdrant Vector Search",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Embedding Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Qdrant Vector Search": {
+      "main": [
+        [
+          {
+            "node": "Construct RAG Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Construct RAG Prompt": {
+      "main": [
+        [
+          {
+            "node": "Generate with Ollama",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate with Ollama": {
+      "main": [
+        [
+          {
+            "node": "Send Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": ["RAG", "Simple"],
+  "triggerCount": 0,
+  "updatedAt": "2024-09-22T03:45:00.000Z",
+  "versionId": "1"
+}

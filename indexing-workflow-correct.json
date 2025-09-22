@@ -1,0 +1,223 @@
+{
+  "name": "Code Indexing Workflow (Correct n8n Pattern)",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "manual-trigger-node",
+      "name": "Start Indexing",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 인덱싱 시작 로그 - n8n 올바른 패턴\nconsole.log('🚀 코드베이스 인덱싱 시작...');\nconsole.log('📁 대상 경로: /data/shared/cloned_repo');\nconsole.log('🔧 임베딩 모델: Ollama nomic-embed-text');\n\n// n8n에서는 항상 배열 반환\nreturn [{\n  json: {\n    status: 'starting',\n    timestamp: new Date().toISOString(),\n    target_path: '/data/shared/cloned_repo',\n    embedding_model: 'nomic-embed-text'\n  }\n}];"
+      },
+      "id": "init-log-node",
+      "name": "Initialize Logging",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [400, 300]
+    },
+    {
+      "parameters": {
+        "command": "find /data/shared/cloned_repo -type f -name '*.swift' | head -1"
+      },
+      "id": "find-first-file-node",
+      "name": "Find First Swift File",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [560, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 첫 번째 파일 선택 - 올바른 n8n 패턴\nconst items = $input.all();\nconst findResult = items[0].json;\n\nif (findResult.exitCode !== 0) {\n  throw new Error(`파일 검색 실패: ${findResult.stderr}`);\n}\n\nconst filePath = findResult.stdout.trim();\nif (!filePath) {\n  throw new Error('❌ Swift 파일을 찾을 수 없습니다.');\n}\n\nconsole.log(`🎯 처리할 파일: ${filePath}`);\n\nreturn [{\n  json: {\n    filePath: filePath,\n    fileName: filePath.split('/').pop(),\n    fileType: 'swift'\n  }\n}];"
+      },
+      "id": "select-file-node",
+      "name": "Select File",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [720, 300]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "filePath": "={{ $json.filePath }}",
+        "options": {}
+      },
+      "id": "read-file-node",
+      "name": "Read File Content",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [880, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 파일 내용을 청크로 분할 - 올바른 n8n 패턴\nconst items = $input.all();\nconst fileData = items[0].json;\nconst content = fileData.data;\n\n// 이전 노드(Select File)에서 파일 정보 가져오기\nconst selectFileItems = $input.all();\nlet fileInfo = null;\n\n// 워크플로우 히스토리에서 Select File 결과 찾기\nfor (let i = selectFileItems.length - 1; i >= 0; i--) {\n  if (selectFileItems[i].json.fileName) {\n    fileInfo = selectFileItems[i].json;\n    break;\n  }\n}\n\n// fileInfo가 없으면 기본값 사용\nif (!fileInfo) {\n  fileInfo = {\n    fileName: 'unknown.swift',\n    filePath: '/data/shared/cloned_repo/unknown.swift',\n    fileType: 'swift'\n  };\n}\n\nconsole.log(`📄 처리 중: ${fileInfo.fileName}`);\nconsole.log(`📏 파일 크기: ${content ? content.length : 0} 문자`);\n\nif (!content || content.length < 50) {\n  throw new Error(`파일이 너무 작습니다: ${content ? content.length : 0} 문자`);\n}\n\n// 첫 1000자만 사용 (테스트용)\nconst textChunk = content.substring(0, 1000).trim();\n\nconsole.log(`📊 청크 생성: ${textChunk.length} 문자`);\n\nreturn [{\n  json: {\n    text_chunk: textChunk,\n    file_path: fileInfo.filePath,\n    file_name: fileInfo.fileName,\n    file_type: fileInfo.fileType,\n    chunk_index: 0,\n    total_chunks: 1,\n    chunk_size: textChunk.length\n  }\n}];"
+      },
+      "id": "create-chunk-node",
+      "name": "Create Text Chunk",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1040, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://ollama:11434/api/embeddings",
+        "sendQuery": false,
+        "sendHeaders": false,
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={{ JSON.stringify({\n  \"model\": \"nomic-embed-text\",\n  \"prompt\": $json.text_chunk\n}) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "generate-embeddings-node",
+      "name": "Generate Embeddings (Ollama)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1200, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Ollama 임베딩 결과 처리 - 올바른 n8n 패턴\nconst items = $input.all();\nconst embeddingResponse = items[0].json;\n\n// Create Text Chunk 노드의 결과 찾기\nlet chunkData = null;\nfor (let i = items.length - 1; i >= 0; i--) {\n  if (items[i].json.text_chunk) {\n    chunkData = items[i].json;\n    break;\n  }\n}\n\nif (!chunkData) {\n  throw new Error('청크 데이터를 찾을 수 없습니다.');\n}\n\nconsole.log('🔍 임베딩 응답 확인:', Object.keys(embeddingResponse));\n\nif (!embeddingResponse.embedding || !Array.isArray(embeddingResponse.embedding)) {\n  console.error('❌ 임베딩 응답 오류:', embeddingResponse);\n  throw new Error('임베딩 생성 실패');\n}\n\nconst embedding = embeddingResponse.embedding;\nconsole.log(`🔢 임베딩 차원: ${embedding.length}`);\n\n// Qdrant 포인트 생성\nconst pointId = Date.now().toString() + '_test';\n\nconst qdrantPoint = {\n  id: pointId,\n  vector: embedding,\n  payload: {\n    text_chunk: chunkData.text_chunk.substring(0, 500) + '...', // 처음 500자만 저장\n    file_path: chunkData.file_path,\n    file_name: chunkData.file_name,\n    file_type: chunkData.file_type,\n    chunk_index: chunkData.chunk_index,\n    total_chunks: chunkData.total_chunks,\n    chunk_size: chunkData.chunk_size,\n    embedding_model: 'nomic-embed-text',\n    indexed_at: new Date().toISOString()\n  }\n};\n\nconsole.log(`✅ Qdrant 포인트 준비 완료`);\n\nreturn [{\n  json: qdrantPoint\n}];"
+      },
+      "id": "prepare-qdrant-point-node",
+      "name": "Prepare Qdrant Point",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1360, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code 노드로 Qdrant Upsert API 사용 - 최신 v1.15.x API 포맷\nconst items = $input.all();\nconst pointData = items[0].json;\n\nconsole.log('📤 Qdrant Upsert API로 포인트 저장 중...');\nconsole.log('🆔 포인트 ID:', pointData.id);\nconsole.log('📏 벡터 차원:', pointData.vector.length);\nconsole.log('📦 페이로드 키:', Object.keys(pointData.payload));\n\n// Qdrant v1.15.x PUT /collections/{collection_name}/points (Upsert) 포맷\nconst requestBody = {\n  points: [{\n    id: pointData.id,\n    vector: pointData.vector,\n    payload: pointData.payload\n  }]\n};\n\nconsole.log('📋 Upsert 요청 데이터:', {\n  endpoint: 'PUT /collections/codebase_collection/points',\n  points_count: requestBody.points.length,\n  point_id: requestBody.points[0].id,\n  vector_length: requestBody.points[0].vector.length,\n  payload_size: Object.keys(requestBody.points[0].payload).length\n});\n\nconst requestOptions = {\n  method: 'PUT',\n  headers: {\n    'Content-Type': 'application/json'\n  },\n  body: JSON.stringify(requestBody)\n};\n\ntry {\n  // Qdrant Upsert Points API 호출\n  const response = await fetch('http://qdrant:6333/collections/codebase_collection/points', requestOptions);\n  const result = await response.json();\n  \n  console.log('🔍 Qdrant 응답:', {\n    status_code: response.status,\n    ok: response.ok,\n    result_status: result.status,\n    operation_id: result.result?.operation_id,\n    time_spent: result.time\n  });\n  \n  // Qdrant v1.15.x는 result.status === 'ok'로 성공 확인\n  if (response.ok && result.status === 'ok') {\n    console.log('✅ Qdrant Upsert 성공!');\n    console.log(`💾 포인트 ${pointData.id} 저장 완료`);\n    \n    return [{\n      json: {\n        status: 'ok',\n        point_id: pointData.id,\n        operation_id: result.result?.operation_id || null,\n        time_spent: result.time,\n        vector_dimension: pointData.vector.length,\n        payload_keys: Object.keys(pointData.payload),\n        api_version: 'v1.15.x',\n        timestamp: new Date().toISOString()\n      }\n    }];\n  } else {\n    console.error('❌ Qdrant Upsert 실패:', {\n      status_code: response.status,\n      result: result\n    });\n    throw new Error(`Qdrant Upsert 실패: HTTP ${response.status} - ${JSON.stringify(result)}`);\n  }\n} catch (error) {\n  console.error('❌ Qdrant API 호출 오류:', error.message);\n  throw new Error(`Qdrant API 오류: ${error.message}`);\n}"
+      },
+      "id": "store-in-qdrant-node",
+      "name": "Store in Qdrant (Code)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1520, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 저장 결과 확인 - Code 노드 방식에 맞게 수정\nconst items = $input.all();\nconst storeResult = items[0].json; // Store in Qdrant (Code) 노드의 결과\n\n// Prepare Qdrant Point 노드의 결과 찾기 (원본 포인트 데이터)\nlet pointData = null;\nfor (let i = items.length - 1; i >= 0; i--) {\n  if (items[i].json.payload && items[i].json.vector) {\n    pointData = items[i].json;\n    break;\n  }\n}\n\nconsole.log('📊 저장 결과:', JSON.stringify(storeResult, null, 2));\n\nif (storeResult.status === 'ok') {\n  console.log(`🎉 인덱싱 완료!`);\n  console.log(`📁 파일: ${pointData?.payload?.file_name || 'unknown'}`);\n  console.log(`🔢 벡터 차원: ${pointData?.vector?.length || 'unknown'}`);\n  console.log(`💾 포인트 ID: ${pointData?.id || 'unknown'}`);\n  console.log(`🔄 작업 ID: ${storeResult.operation_id || 'N/A'}`);\n  \n  return [{\n    json: {\n      status: 'success',\n      message: '첫 번째 Swift 파일이 성공적으로 인덱싱되었습니다!',\n      point_id: pointData?.id,\n      file_name: pointData?.payload?.file_name,\n      vector_dimension: pointData?.vector?.length,\n      embedding_model: pointData?.payload?.embedding_model,\n      chunk_size: pointData?.payload?.chunk_size,\n      stored_at: pointData?.payload?.indexed_at,\n      qdrant_operation_id: storeResult.operation_id,\n      completed_at: storeResult.timestamp\n    }\n  }];\n} else {\n  console.error(`❌ Qdrant 저장 실패:`, storeResult);\n  throw new Error(`Qdrant 저장 실패: ${JSON.stringify(storeResult)}`);\n}"
+      },
+      "id": "verify-storage-node",
+      "name": "Verify Storage Success",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1680, 300]
+    }
+  ],
+  "connections": {
+    "Start Indexing": {
+      "main": [
+        [
+          {
+            "node": "Initialize Logging",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Initialize Logging": {
+      "main": [
+        [
+          {
+            "node": "Find First Swift File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find First Swift File": {
+      "main": [
+        [
+          {
+            "node": "Select File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select File": {
+      "main": [
+        [
+          {
+            "node": "Read File Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read File Content": {
+      "main": [
+        [
+          {
+            "node": "Create Text Chunk",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Text Chunk": {
+      "main": [
+        [
+          {
+            "node": "Generate Embeddings (Ollama)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Embeddings (Ollama)": {
+      "main": [
+        [
+          {
+            "node": "Prepare Qdrant Point",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Qdrant Point": {
+      "main": [
+        [
+          {
+            "node": "Store in Qdrant",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store in Qdrant": {
+      "main": [
+        [
+          {
+            "node": "Verify Storage Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": ["indexing", "RAG", "ollama", "correct-pattern"],
+  "triggerCount": 0,
+  "updatedAt": "2024-09-22T06:00:00.000Z",
+  "versionId": "6"
+}
